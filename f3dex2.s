@@ -217,7 +217,7 @@ textureSettings2:
 
 // 0x01EC
 geometryModeLabel:
-    .dw G_CLIPPING
+    .dw 0x00000000
 
 // excluding ambient light
 MAX_LIGHTS equ 7
@@ -267,9 +267,11 @@ jumpTableEntry G_POPMTX_end   // G_POPMTX
 jumpTableEntry G_MTX_end      // G_MTX (multiply)
 jumpTableEntry G_MOVEMEM_end  // G_MOVEMEM, G_MTX (load)
 
-// 0x0314-0x0370: RDP/Immediate Command Jump Table
-jumpTableEntry G_SPECIAL_3_handler
-jumpTableEntry G_SPECIAL_2_handler
+vtxcol_lights_consts:
+    .dh (1 << (16 - 10))
+    .dh (1 << (16 -  5))
+
+// 0x031C-0x0370: RDP/Immediate Command Jump Table
 jumpTableEntry G_SPECIAL_1_handler
 jumpTableEntry G_DMA_IO_handler
 jumpTableEntry G_TEXTURE_handler
@@ -2023,6 +2025,52 @@ f3dzex_ovl2_00001690:
     vmrg    $v3, $v0, $v31[5]
     llv     $v22[4], 0x0018(inputVtxPos)
 f3dzex_ovl2_000016F4:
+    /**
+     *  Vertex Color and Lighting on the same vertex
+     *
+     *  If G_VERTEX_COLOR (replaces unused G_CLIPPING) is enabled in the geometry mode, loaded vertices will be both
+     *  vertex colored and affected by lighting. The vertex color is stored similarly to RGBA16 in the vertex flag field:
+     *
+     *  1 11111 11111 11111 (16-bit, 5 bits per channel)
+     *  X R     G     B
+     *
+     *  The MSB is currently unused and can be either 0 or 1. Moving the would-be alpha bit to the MSB simplifies extraction.
+     *
+     *  Once the shade color computation from lighting is concluded, it will be multiplied by the vertex color to obtain the
+     *  final shade color. If the vertex color is full white (0x7FFF) then the geometry will behave as if it were not vertex
+     *  colored.
+     *
+     *  The routine uses $3, $17, $28, $v21, $v27, $v28
+     */
+    andi    $11, $5, G_VERTEX_COLOR_H
+    vclr    $v27                                    // $v27 = [0, 0, 0, 0, 0, 0, 0, 0]
+    beqz    $11, no_light_vertex_color              // Skip if G_VERTEX_COLOR is not set
+     lh     $28, (0x10 * 0 + 6)(inputVtxPos)        // $28 = c1
+    vclr    $v21                                    // $v21 = [0, 0, 0, 0, 0, 0, 0, 0]
+    mtc2    $28, $v27[4]                            // $v27 = [0, 0, c1, 0, 0, 0, 0, 0]
+    lh      $17, (0x10 * 1 + 6)(inputVtxPos)        // $17 = c2
+    li      $3, vtxcol_lights_consts
+    mtc2    $17, $v27[12]                           // $v27 = [0, 0, c1, 0, 0, 0, c2, 0]
+    llv     $v21[0], 0($3)                          // $v21 = [64, 2048, 0, 0, 0, 0, 0, 0]
+    vmudn   $v28, $v1, $v27[2h]                     // $v28 = [c1, c1, c1, c1, c2, c2, c2, c2]
+    llv     $v21[8], 0($3)                          // $v21 = [64, 2048, 0, 0, 64, 2048, 0, 0]
+    li      $3, (1 << 10)
+    vmudl   $v28, $v28, $v21                        // $v28 = [c1 >> 10, c1 >> 5, 0, 0, c2 >> 10, c2 >> 5, 0, 0]
+    mtc2    $3, $v21[0]                             // $v21 = [1024, ...]
+    vor     $v28, $v28, $v27                        // $v28 = [c1 >> 10, c1 >> 5, c1, 0, c2 >> 10, c2 >> 5, c2, 0]
+    li      $3, (1 << 5)
+    vmudn   $v27, $v28, $v21[0]                     // $v27 = [r1 << 10, g1 << 10, b1 << 10, 0, r2 << 10, g2 << 10, b2 << 10, 0]
+    mtc2    $3, $v21[2]                             // $v21 = [1024, 32, ...]
+    li      $3, (0b11111000 << 7)
+    vmudn   $v28, $v28, $v21[1]                     // $v28 = [r1 << 5, g1 << 5, b1 << 5, 0, r2 << 5, g2 << 5, b2 << 5, 0]
+    mtc2    $3, $v21[0]
+    li      $3, (0b00000111 << 7)
+    vand    $v27, $v27, $v21[0]
+    mtc2    $3, $v21[2]
+    vand    $v28, $v28, $v21[1]
+    vor     $v27, $v27, $v28
+    vmulf   $v29, $v29, $v27                        // multiply with v29, the final shade color computed from lighting
+no_light_vertex_color:
     vge     $v27, $v25, $v31[3] // v31[3] is 32512
     andi    $11, $5, G_TEXTURE_GEN_H
     vmulf   $v21, $v7, $v2[0h]
