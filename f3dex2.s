@@ -338,8 +338,8 @@ jumpTableEntry G_MTX_end      // G_MTX (multiply)
 jumpTableEntry G_MOVEMEM_end  // G_MOVEMEM, G_MTX (load)
 
 // 0x0314-0x0370: RDP/Immediate Command Jump Table
-jumpTableEntry G_SPECIAL_3_handler
-jumpTableEntry G_SPECIAL_2_handler
+jumpTableEntry G_SELECT_DL_handler
+jumpTableEntry G_SETSTATUS_handler
 jumpTableEntry G_SPECIAL_1_handler
 jumpTableEntry G_DMA_IO_handler
 jumpTableEntry G_TEXTURE_handler
@@ -486,6 +486,10 @@ tempMatrix:
 // 0xA50-0xBA8: ??
 .skip 0x198
 
+branch_status:
+    .skip 2
+.align 8
+
 RDP_CMD_BUFSIZE equ 0x158
 RDP_CMD_BUFSIZE_EXCESS equ 0xB0 // Maximum size of an RDP triangle command
 RDP_CMD_BUFSIZE_TOTAL equ RDP_CMD_BUFSIZE + RDP_CMD_BUFSIZE_EXCESS
@@ -622,13 +626,14 @@ calculate_overlay_addrs:
 load_overlay1_init:
     li      $11, overlayInfo1   // set up loading of overlay 1
 
+    nop
+    nop
 .align 8
 
     jal     load_overlay_and_enter  // load overlay 1 and enter
      move   $12, $ra                // set up the return address, since load_overlay_and_enter returns to $12
-
+    // This return should be such that it coincides with displaylist_dma so no code from overlay 1 is ran
 // Overlays 0 and 1 overwrite everything up to this point (2.08 versions overwrite up to the previous .align 8)
-.align 8
 Overlay01End_:
 
 displaylist_dma: // loads inputBufferLength bytes worth of displaylist data via DMA into inputBuffer
@@ -661,6 +666,10 @@ run_next_DL_command:
      lw     cmd_w1, (inputBufferEnd + 4)(inputBufferPos) // load the next DL word into cmd_w1
     jr      $11                                         // jump to the loaded command handler
      addiu  inputBufferPos, inputBufferPos, 0x0008      // increment the DL index by 2 words
+
+G_SETSTATUS_handler:
+    j       run_next_DL_command
+     sh     cmd_w1, branch_status
 
 .if (UCODE_IS_F3DEX2_204H) // Microcodes besides F3DEX2 2.04H have this as a noop
 G_SPECIAL_1_handler:    // Seems to be a manual trigger for mvp recalculation
@@ -801,9 +810,9 @@ ovl0_04001284:
 ovl0_0400129C:
     jr $ra
      nop
-    nop
 .endif
 
+.align 8
 Overlay23LoadAddress:
 
 // Overlay 3 registers
@@ -1751,8 +1760,12 @@ Overlay0End:
 
 Overlay1Address:
 
+G_SELECT_DL_handler:
+    lhu     $1, branch_status
+    andi    $3, cmd_w0, 0xFFFF
+    bne     $1, $3, run_next_DL_command
 G_DL_handler:
-    lbu     $1, displayListStackLength  // Get the DL stack length
+     lbu    $1, displayListStackLength  // Get the DL stack length
     sll     $2, cmd_w0, 15              // Shifts the push/nopush value to the highest bit in $2
 f3dzex_ovl1_00001008:
     jal     segmented_to_physical
@@ -1868,10 +1881,10 @@ do_movemem:
     srl     $2, cmd_w0, 5                                // Left shifts the index by 5 (which is then added to the value read from the movemem table)
     lhu     $ra, (movememHandlerTable - (G_POPMTX | 0xFF00))($12)  // Loads the return address from movememHandlerTable based on command byte
     j       dma_read_write
-G_SETOTHERMODE_H_handler:
+G_SETOTHERMODE_H_handler: // These handler labels must be 4 bytes apart for the code below to work
      add    $20, $20, $2
 G_SETOTHERMODE_L_handler:
-    lw      $3, -0x1074($11)
+    lw      $3, (othermode0 - G_SETOTHERMODE_H_handler)($11) // resolves to othermode0 or othermode1 based on which handler was jumped to
     lui     $2, 0x8000
     srav    $2, $2, cmd_w0
     srl     $1, cmd_w0, 8
@@ -1879,7 +1892,7 @@ G_SETOTHERMODE_L_handler:
     nor     $2, $2, $zero
     and     $3, $3, $2
     or      $3, $3, cmd_w1
-    sw      $3, -0x1074($11)
+    sw      $3, (othermode0 - G_SETOTHERMODE_H_handler)($11)
     lw      cmd_w0, otherMode0
     j       G_RDP_handler
      lw     cmd_w1, otherMode1
