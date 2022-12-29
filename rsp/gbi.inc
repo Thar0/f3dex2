@@ -121,6 +121,8 @@ G_MV_LIGHT    equ 0x0A
 G_MV_POINT    equ 0x0C
 G_MV_MATRIX   equ 0x0E
 
+G_MW_SEGMENT equ 0x06
+
 inputVtxSize equ 0x10
 vtxSize equ 0x28
 lightSize equ 0x18

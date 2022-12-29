@@ -622,6 +622,8 @@ calculate_overlay_addrs:
 load_overlay1_init:
     li      $11, overlayInfo1   // set up loading of overlay 1
 
+    nop
+    nop
 .align 8
 
     jal     load_overlay_and_enter  // load overlay 1 and enter
@@ -801,9 +803,9 @@ ovl0_04001284:
 ovl0_0400129C:
     jr $ra
      nop
-    nop
 .endif
 
+.align 8
 Overlay23LoadAddress:
 
 // Overlay 3 registers
@@ -1779,6 +1781,9 @@ G_RDPHALF_1_handler:
 G_MOVEWORD_handler:
     srl     $2, cmd_w0, 16                              // load the moveword command and word index into $2 (e.g. 0xDB06 for G_MW_SEGMENT)
     lhu     $1, (movewordTable - (G_MOVEWORD << 8))($2) // subtract the moveword label and offset the word table by the word index (e.g. 0xDB06 becomes 0x0304)
+    li      $11, ((G_MOVEWORD << 8) | G_MW_SEGMENT)     // convert words for G_MW_SEGMENT from segmented to physical
+    beq     $2, $11, segmented_to_physical              // (segmentTable is init to 0 so when a segment is first set there is no problem, but segment 0 must not change)
+     li     $ra, do_moveword                            // setup return address
 do_moveword:
     add     $1, $1, cmd_w0          // adds the offset in the command word to the address from the table (the upper 4 bytes are effectively ignored)
     j       run_next_DL_command     // process the next command
@@ -1868,10 +1873,10 @@ do_movemem:
     srl     $2, cmd_w0, 5                                // Left shifts the index by 5 (which is then added to the value read from the movemem table)
     lhu     $ra, (movememHandlerTable - (G_POPMTX | 0xFF00))($12)  // Loads the return address from movememHandlerTable based on command byte
     j       dma_read_write
-G_SETOTHERMODE_H_handler:
+G_SETOTHERMODE_H_handler: // These handler labels must be 4 bytes apart for the code below to work
      add    $20, $20, $2
 G_SETOTHERMODE_L_handler:
-    lw      $3, -0x1074($11)
+    lw      $3, (othermode0 - G_SETOTHERMODE_H_handler)($11) // resolves to othermode0 or othermode1 based on which handler was jumped to
     lui     $2, 0x8000
     srav    $2, $2, cmd_w0
     srl     $1, cmd_w0, 8
@@ -1879,7 +1884,7 @@ G_SETOTHERMODE_L_handler:
     nor     $2, $2, $zero
     and     $3, $3, $2
     or      $3, $3, cmd_w1
-    sw      $3, -0x1074($11)
+    sw      $3, (othermode0 - G_SETOTHERMODE_H_handler)($11)
     lw      cmd_w0, otherMode0
     j       G_RDP_handler
      lw     cmd_w1, otherMode1
