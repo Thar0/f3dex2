@@ -419,9 +419,15 @@ jumpTableEntry G_POPMTX_end   // G_POPMTX
 jumpTableEntry G_MTX_end      // G_MTX (multiply)
 jumpTableEntry G_MOVEMEM_end  // G_MOVEMEM, G_MTX (load)
 
-// 0x0314-0x0370: RDP/Immediate Command Jump Table
-jumpTableEntry G_SPECIAL_3_handler
-jumpTableEntry G_SPECIAL_2_handler
+// Thanks to F3DEX3 for the decal fix implementation, from which these coefficients originate
+// https://github.com/HackerN64/F3DEX3/blob/2cf5377c3a13e940a24e9edbbb3dd362ff604350/f3dex3.s#L406-L407
+decal_fix_coeffs:
+decalFixMult equ 0x0400
+decalFixOff equ (-(decalFixMult / 2))
+    .dh decalFixMult
+    .dh decalFixOff
+
+// 0x0318-0x0370: RDP/Immediate Command Jump Table
 jumpTableEntry G_SPECIAL_1_handler
 jumpTableEntry G_DMA_IO_handler
 jumpTableEntry G_TEXTURE_handler
@@ -784,6 +790,7 @@ start: // This is at IMEM 0x1080, not the start of IMEM
 #endif
     li      rdpCmdBufEnd, rdpCmdBuffer1End
     vsub    vOne, vZero, $v31[0]   // Vector of 1s
+    li      $28, decal_fix_coeffs
 #if !CFG_XBUS // FIFO version
     lw      $11, rdpFifoPos
     lw      $12, OSTask + OS_TASK_OFF_FLAGS
@@ -903,8 +910,6 @@ G_SPNOOP_handler:
 #if !CFG_G_SPECIAL_1_IS_RECALC_MVP                      // F3DEX2 2.04H has this as a real command
 G_SPECIAL_1_handler:
 #endif
-G_SPECIAL_2_handler:
-G_SPECIAL_3_handler:
 run_next_DL_command:
      mfc0   $1, SP_STATUS                               // load the status word into register $1
     lw      cmd_w0, (inputBufferEnd)(inputBufferPos)    // load the command word into cmd_w0
@@ -1921,8 +1926,8 @@ dAdE_f equ $v8  // (fraction) [drde, dgde, dbde, dade, dsde, dtde, dwde, dzde]
 dAdE_i equ $v9  // (integer)  [drde, dgde, dbde, dade, dsde, dtde, dwde, dzde]
 
     // dAdY = dA.y * (1 / dy)
-    vmudl   v___, dA_y_f, inv_dX_f[1]
-    vmadm   v___, dA_y_i, inv_dX_f[1]
+    vmudl   v___, dA_y_f, inv_dX_f[1]           ::  llv     $v22[0], 0($28)                 // Load decal fix coefficients for decal fix
+    vmadm   v___, dA_y_i, inv_dX_f[1]           ::  lw      $19, otherMode1                 // Load othermode for decal fix
     vmadn   dAdY_f, dA_y_f, inv_dX_i[1]         ::  sdv     dAdX_f[0], 0x0018(TriShadePtr)  // Store drdx, dgdx, dbdx, dadx shade coefficients (fractional)
     vmadh   dAdY_i, dA_y_i, inv_dX_i[1]         ::  sdv     dAdX_i[0], 0x0008(TriShadePtr)  // Store drdx, dgdx, dbdx, dadx shade coefficients (integer)
     // dAdE = dAdY + dAdX * dxhdy
@@ -1955,18 +1960,32 @@ dAdE_i equ $v9  // (integer)  [drde, dgde, dbde, dade, dsde, dtde, dwde, dzde]
     vmudl   v___, $v10, LSHIFT_5                    ::  ssv     dAdE_i[14], (0x0008 - 0x10)(rdpCmdBufPtr) // Store dzde (int)
     vmadn   vtx_attrs_1_f, vtx_attrs_1_f, LSHIFT_5  ::  ssv     dAdX_f[14], (0x0006 - 0x10)(rdpCmdBufPtr) // Store dzdx (frac)
     vmadh   vtx_attrs_1_i, vtx_attrs_1_i, LSHIFT_5  ::  ssv     dAdX_i[14], (0x0004 - 0x10)(rdpCmdBufPtr) // Store dzdx (int)
-                                                        ssv     dAdY_f[14], (0x000E - 0x10)(rdpCmdBufPtr) // Store dzdy (frac)
-                                                        ssv     dAdY_i[14], (0x000C - 0x10)(rdpCmdBufPtr) // Store dzdy (int)
+
+    // Thanks again to F3DEX3 upon which this decal fix implementation is based
+    // https://github.com/HackerN64/F3DEX3/blob/2cf5377c3a13e940a24e9edbbb3dd362ff604350/f3dex3.s#L1790-L1796
+    // accum all elems = -DM/2
+    vmudh   v___, vOne, $v22[1]                     ::  andi    $19, $19, ZMODE_DEC     // Mask to two Z mode bits
+    // elem 7 = (0 to DM/2-1) - DM/2 = -DM/2 to -1
+    vmadm   $v25, vtx_attrs_1_i, $v22[0]            ::  addi    $19, $19, -ZMODE_DEC    // Check if equal to decal mode
+                                                        beqz    $19, decal_fix
+                                                         ssv    dAdY_f[14], (0x000E - 0x10)(rdpCmdBufPtr) // Store dzdy (frac)
+decal_fix_ret:
+
+                                                        ssv     vtx_attrs_1_i[14], (0x0000 - 0x10)(rdpCmdBufPtr) // Store z (int)
                                                         ssv     vtx_attrs_1_f[14], (0x0002 - 0x10)(rdpCmdBufPtr) // Store z (frac)
                                                         // eventually returns to $ra, which is next cmd, second tri in TRI2, or middle of clipping
                                                         j       check_rdp_buffer_full
-                                                        ssv     vtx_attrs_1_i[14], (0x0000 - 0x10)(rdpCmdBufPtr) // Store z (int)
+                                                         ssv    dAdY_i[14], (0x000C - 0x10)(rdpCmdBufPtr) // Store dzdy (int)
 no_z_buffer:
     sdv     vtx_attrs_1_f[0], 0x10($2)  // Store RGBA shade color (fractional)
     sdv     vtx_attrs_1_i[0], 0x00($2)  // Store RGBA shade color (integer)
     sdv     vtx_attrs_1_f[8], 0x10($1)  // Store S, T, W texture coefficients (fractional)
     j       check_rdp_buffer_full       // eventually returns to $ra, which is next cmd, second tri in TRI2, or middle of clipping
      sdv    vtx_attrs_1_i[8], 0x00($1)  // Store S, T, W texture coefficients (integer)
+decal_fix:
+    // Clamp dzdy_i (6) to <= -val or >= val
+    j       decal_fix_ret
+     vcr    dAdY_i, dAdY_i, $v25[7]
 
 
 

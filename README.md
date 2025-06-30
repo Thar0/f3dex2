@@ -1,4 +1,12 @@
-# F3DEX2
+# F3DEX2 + Decal Fix
+
+This branch contains a backport of the decal fix employed by [F3DEX3](https://github.com/HackerN64/F3DEX3), which can in various cases greatly reduce the z-fighting of decals on LLE and Hardware. This modification is otherwise fully binary compatible and is detected by HLE as the MM Point Lighting ucode for maximum compatibility.
+
+If you don't care about compatibility as much, it is still recommended to use [F3DEX3](https://github.com/HackerN64/F3DEX3) instead.
+
+
+## The rest of the original README
+
 Matching and mostly documented disassemblies of the F3DEX2/F3DZEX2 N64 RSP microcode family.
 
 #### Terminology:
